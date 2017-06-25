@@ -1,0 +1,9 @@
+[package]
+name = "unosolo"
+version = "0.1.0"
+authors = ["Vittorio Romeo <vittorio.romeo@outlook.com>"]
+
+[dependencies]
+structopt = "0.0.3"
+structopt-derive = "0.0.3"
+walkdir = "1.0.7"
