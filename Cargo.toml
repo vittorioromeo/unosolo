@@ -7,3 +7,6 @@ authors = ["Vittorio Romeo <vittorio.romeo@outlook.com>"]
 structopt = "0.0.3"
 structopt-derive = "0.0.3"
 walkdir = "1.0.7"
+maplit = "0.1.4"
+regex = "0.2"
+lazy_static = "0.2.8"
