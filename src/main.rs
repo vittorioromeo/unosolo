@@ -27,9 +27,6 @@ use regex::Regex;
 #[structopt(name = "unosolo",
             about = "transforms a C++ header-only library in a self-contained single header.")]
 struct Opt {
-    #[structopt(help = "input file")]
-    input: String,
-
     #[structopt(short = "p", long = "paths", help = "paths", default_value = ".")]
     paths: Vec<String>,
 
