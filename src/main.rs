@@ -1,31 +1,31 @@
-extern crate walkdir;
-extern crate structopt;
-extern crate regex;
+// Copyright (c) 2017 Vittorio Romeo
+// MIT License |  https://opensource.org/licenses/MIT
+// http://vittorioromeo.info | vittorio.romeo@outlook.com
 
 #[macro_use]
 extern crate structopt_derive;
 
 #[macro_use]
-extern crate maplit;
-
-#[macro_use]
 extern crate lazy_static;
+
+extern crate walkdir;
+extern crate structopt;
+extern crate regex;
 
 use walkdir::WalkDir;
 use structopt::StructOpt;
-use std::str::FromStr;
 use std::io::BufReader;
-use std::io::Read;
 use std::io::BufRead;
 use std::fs::File;
 use std::path::Path;
 use std::path::PathBuf;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use regex::Regex;
 
 #[derive(StructOpt, Debug)]
 #[structopt(name = "unosolo",
-            about = "Transforms a C++ header-only library in a self-contained single header.")]
+            about = "transforms a C++ header-only library in a self-contained single header.")]
 struct Opt {
     #[structopt(help = "input file")]
     input: String,
@@ -40,6 +40,7 @@ struct Opt {
     top_include: String,
 }
 
+/// Prints to `stderr` only if verbose mode is enabled.
 macro_rules! verbose_eprintln {
     ($opt:expr, $($tts:tt)*) => {
         if $opt.verbose {
@@ -48,170 +49,106 @@ macro_rules! verbose_eprintln {
     }
 }
 
-trait HashMapExt<K, C, S>
-where
-    C: SetLike,
-{
-    fn put(&mut self, k: K, v: C::Item);
-    fn put_empty(&mut self, k: K);
-}
-
-trait SetLike {
-    type Item;
-    fn with_one_item(x: Self::Item) -> Self;
-    fn add(&mut self, x: Self::Item);
-    fn new() -> Self;
-}
-
-impl<T> SetLike for Vec<T> {
-    type Item = T;
-    fn with_one_item(x: Self::Item) -> Self {
-        vec![x]
-    }
-    fn add(&mut self, x: Self::Item) {
-        self.push(x)
-    }
-    fn new() -> Self {
-        Vec::new()
-    }
-}
-
-impl<T> SetLike for HashSet<T>
-where
-    T: Eq + std::hash::Hash,
-{
-    type Item = T;
-    fn with_one_item(x: Self::Item) -> Self {
-        hashset!{x}
-    }
-    fn add(&mut self, x: Self::Item) {
-        self.insert(x);
-    }
-    fn new() -> Self {
-        HashSet::new()
-    }
-}
-
-impl<K, C, S> HashMapExt<K, C, S> for HashMap<K, C, S>
-where
-    C: SetLike,
-    K: Eq + std::hash::Hash,
-    S: std::hash::BuildHasher,
-{
-    fn put(&mut self, k: K, v: C::Item) {
-        if self.contains_key(&k) {
-            self.get_mut(&k).unwrap().add(v);
-        } else {
-            self.insert(k, C::with_one_item(v));
-        }
-    }
-
-    fn put_empty(&mut self, k: K) {
-        self.insert(k, C::new());
-    }
-}
-
-fn is_header(x: &walkdir::DirEntry) -> bool {
-    x.file_name()
-        .to_str()
-        .map(|s| s.ends_with(".h") || s.ends_with(".hpp"))
-        .unwrap_or(false)
-}
-
 type PathSet = HashSet<PathBuf>;
 type PathGraph = HashMap<PathBuf, PathSet>;
 
-use regex::Regex;
+/// Returns `true` if `x` is a path to an header currently supported by `unosolo`.
+fn is_header(x: &walkdir::DirEntry) -> bool {
+    x.file_name().to_str().map_or(false, |s| {
+        s.ends_with(".h") || s.ends_with(".hpp")
+    })
+}
 
+/// Returns `true` if `s` is a line contaning only an inline C++ comment.
 fn is_comment(s: &str) -> bool {
-    lazy_static!{
-        static ref COMMENT_REGEX: Regex = Regex::new(r#"^[[:blank:]]*(//.*)|"(?:\\"|.)*?""#).unwrap();
+    lazy_static! {
+        static ref RE: Regex = Regex::new(
+            r#"^[[:blank:]]*(//.*)|"(?:\\"|.)*?""#).unwrap();
     }
 
-    COMMENT_REGEX.is_match(s)
+    RE.is_match(s)
 }
 
+/// Returns `true` if `s` is a line containing only `#pragma once`.
 fn is_pragma_once(s: &str) -> bool {
-    lazy_static!{
-        static ref COMMENT_REGEX: Regex = Regex::new(r#"[[:blank:]]*#pragma once.*"#).unwrap();
+    lazy_static! {
+        static ref RE: Regex = Regex::new(
+            r#"[[:blank:]]*#pragma once.*"#).unwrap();
     }
 
-    COMMENT_REGEX.is_match(s)
+    RE.is_match(s)
 }
 
+/// Returns `s` without the first and last character.
+fn unquote(s: &str) -> &str {
+    &s[1..s.len() - 1]
+}
+
+/// Returns `true` if `s` is a line containing only an `#include` directive.
+fn is_include_directive(s: &str) -> bool {
+    s.find("#include").map_or(false, |y| {
+        s[0..y].chars().all(|c| c.is_whitespace())
+    })
+}
+
+/// Step of the graph traversal, prints lines to the final single include.
 fn walk_pg_impl(
     opt: &Opt,
     dependencies: &PathGraph,
-    include_directive_lines: &mut HashSet<String>,
-    key: &PathBuf,
+    include_directive_lines: &HashSet<String>,
+    key: &Path,
     depth: usize,
-    ps: &mut PathSet,
-    target: &mut String,
+    visited: &mut PathSet,
 ) {
-    dependencies.get(key).map(|v| for x in v {
+    dependencies.get(key).map(|vec| for dependency_path in vec {
         walk_pg_impl(
             opt,
             dependencies,
             include_directive_lines,
-            x,
+            dependency_path,
             depth + 1,
-            ps,
-            target,
+            visited,
         );
     });
 
-    if !ps.contains(key) {
+    if !visited.contains(key) {
         verbose_eprintln!(opt, "{} {:?}", "\t".repeat(depth), key);
-        ps.insert(key.clone());
+        visited.insert(key.to_owned());
 
         let f = File::open(key).unwrap();
-        let mut f = BufReader::new(f);
+        let f = BufReader::new(f);
 
-        let mut buf = String::new();
         for line in f.lines().filter_map(|e| e.ok()).filter(|l| {
             !include_directive_lines.contains(l) && !is_comment(l) && !is_pragma_once(l)
         })
         {
-            *target += &line;
-            *target += "\n";
+            println!("{}", line);
         }
 
-
-        //f.read_to_string(&mut buf).unwrap();
-        *target += &buf;
-        *target += "\n\n\n";
+        println!("\n\n\n");
     }
 }
 
+/// Begins walking through the `dependencies` graph, starting from `top_include_path`.
 fn walk_pg(
     opt: &Opt,
     dependencies: &PathGraph,
-    include_directive_lines: &mut HashSet<String>,
-    key: &PathBuf,
-    ps: &mut PathSet,
-    target: &mut String,
+    include_directive_lines: &HashSet<String>,
+    top_include_path: &Path,
 ) {
+    let mut visited = PathSet::new();
+
     walk_pg_impl(
         opt,
         dependencies,
         include_directive_lines,
-        key,
+        top_include_path,
         0,
-        ps,
-        target,
+        &mut visited,
     )
 }
 
-fn unquote(x: &str) -> &str {
-    &x[1..x.len() - 1]
-}
-
-fn is_include_directive(x: &str) -> bool {
-    x.find("#include").map_or(false, |y| {
-        x[0..y].chars().all(|c| c.is_whitespace())
-    })
-}
-
+/// Builds the dependency graph and include directives set by reading the file at `entry_path`.
 fn fill_dependencies(
     opt: &Opt,
     dependencies: &mut PathGraph,
@@ -227,6 +164,7 @@ fn fill_dependencies(
         |x| is_include_directive(x),
     )
     {
+        // Cut off `#include`.
         let filename = &line[9..];
 
         if filename.chars().nth(0).unwrap() == '"' {
@@ -236,7 +174,10 @@ fn fill_dependencies(
             let cpath = path.canonicalize().unwrap();
             verbose_eprintln!(opt, "cpath: {:?}", cpath);
 
-            dependencies.put(entry_path.clone(), cpath.clone());
+            dependencies
+                .entry(entry_path.clone())
+                .or_insert_with(PathSet::new)
+                .insert(cpath.clone());
 
             verbose_eprintln!(
                 opt,
@@ -250,6 +191,7 @@ fn fill_dependencies(
     }
 }
 
+/// Executes `f` for all header files in the user-specified search path.
 fn for_all_headers<F>(opt: &Opt, mut f: F)
 where
     F: FnMut(PathBuf, &Path, &str, &str) -> (),
@@ -270,6 +212,20 @@ where
     }
 }
 
+/// Prints the final header file to `stdout`.
+fn print_final_result(
+    opt: &Opt,
+    top_include_path: &Path,
+    dependencies: &PathGraph,
+    include_directive_lines: &HashSet<String>,
+) {
+    println!("// generated with `unosolo`");
+    println!("https://github.com/SuperV1234/unosolo");
+    println!("#pragma once");
+
+    walk_pg(opt, dependencies, include_directive_lines, top_include_path);
+}
+
 fn main() {
     let opt = Opt::from_args();
     verbose_eprintln!(opt, "Options: {:?}", opt);
@@ -283,34 +239,25 @@ fn main() {
         verbose_eprintln!(opt, "parent: {:?}", parent);
         verbose_eprintln!(opt, "\n");
 
-        if !dependencies.contains_key(&c_entry_path) {
-            dependencies.put_empty(c_entry_path.clone());
-        }
+        dependencies.entry(c_entry_path.clone()).or_insert_with(
+            PathSet::new,
+        );
 
         fill_dependencies(
             &opt,
             &mut dependencies,
             &mut include_directive_lines,
             &c_entry_path,
-            &prefix,
-            &parent,
+            prefix,
+            parent,
         );
     });
 
-
-    let mut ps = PathSet::new();
-    let begin = PathBuf::from(&opt.top_include).canonicalize().unwrap();
-
-    let mut res = String::new();
-    res += "// generated with unosolo\n#pragma once\n";
-
-    walk_pg(
+    let top_include_path = PathBuf::from(&opt.top_include).canonicalize().unwrap();
+    print_final_result(
         &opt,
-        &mut dependencies,
-        &mut include_directive_lines,
-        &begin,
-        &mut ps,
-        &mut res,
+        &top_include_path,
+        &dependencies,
+        &include_directive_lines,
     );
-    println!("{}", res);
 }
