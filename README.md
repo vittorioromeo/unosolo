@@ -18,7 +18,7 @@
 
 ## Disclaimer
 
-This is my first Rust project, mainly created to start getting used to the language. The code quality is horrible, the algorithm used to create and traverse the `#include` graph is suboptimal, and only *header-only* libraries with relative `#include "..."` paths are currently supported.
+This is my first Rust project, mainly created to start getting used to the language. The code quality is horrible, the algorithm used to create and traverse the `#include` graph is suboptimal, and only *header-only* libraries with relative `#include "..."` directives are currently supported.
 
 My intention is to improve `unosolo` as I get better with Rust and the final goal is being able to successfully use it on popular libraries.
 
