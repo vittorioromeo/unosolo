@@ -11,10 +11,9 @@
 [badge.license]: http://img.shields.io/badge/license-mit-blue.svg?style=flat-square
 [badge.gratipay]: https://img.shields.io/gratipay/user/SuperV1234.svg?style=flat-square
 
-[build]: https://travis-ci.org/SuperV1234/unosolo
 [stability]: http://github.com/badges/stability-badges
 [license]: https://github.com/SuperV1234/unosolo/blob/master/LICENSE
-
+[gratipay]: https://gratipay.com/~SuperV1234/
 
 
 ## Disclaimer
