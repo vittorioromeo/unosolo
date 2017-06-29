@@ -1,6 +1,6 @@
 [package]
 name = "unosolo"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Vittorio Romeo <vittorio.romeo@outlook.com>"]
 
 [dependencies]
