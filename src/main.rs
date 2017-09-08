@@ -317,3 +317,7 @@ fn main() {
 
 #[test]
 fn test0() {}
+
+// TODO: allow multiple libraries to be specified (imagine vrm_core and vrm_cpp)
+// TODO: automatically detect top-header includes
+// TODO: rewrite?
