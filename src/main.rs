@@ -348,3 +348,13 @@ fn test0() {}
 // TODO: allow multiple libraries to be specified (imagine vrm_core and vrm_cpp)
 // TODO: automatically detect top-header includes
 // TODO: rewrite?
+// TODO: this is broken:
+/*
+
+#if VRM_CORE_IMPL_ASSERT_DISABLED
+#include <vrm/core/assert/impl/assert_macros_disabled.hpp>
+#else
+#include <vrm/core/assert/impl/assert_macros_enabled.hpp>
+#endif
+
+*/
