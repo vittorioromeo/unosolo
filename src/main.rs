@@ -46,14 +46,14 @@ macro_rules! verbose_eprintln {
     }
 }
 
+/// Attempts to unwrap `x`, otherwise panics with formatted string.
 macro_rules! expect_fmt {
     ($x:expr, $($tts:tt)*) => {
         $x.unwrap_or_else(|_| panic!($($tts)*))
     }
 }
 
-
-
+// Type aliases for the path graph.
 type PathSet = HashSet<PathBuf>;
 type PathGraph = HashMap<PathBuf, PathSet>;
 
@@ -190,6 +190,7 @@ fn fill_dependencies(opt: &Opt,
             IncludeType::Relative => {
                 include_directive_lines.insert(line.clone());
                 let fullpath = prefix.to_owned() + "/" + parent + "/" + unquoted;
+                verbose_eprintln!(opt, "fullpath: {:?}", fullpath);
                 let cpath = expect_fmt!(std::path::Path::new(&fullpath).canonicalize(),
                                         "Path {:?} does not exist",
                                         fullpath);
@@ -206,12 +207,22 @@ fn fill_dependencies(opt: &Opt,
                 verbose_eprintln!(opt, "found absolute include: {:?}", unquoted);
 
                 if absolute_includes.contains_key(unquoted) {
-                    verbose_eprintln!(opt, "found absolute include to SUBSTITUE {:?}", unquoted);
-                }
+                    include_directive_lines.insert(line.clone());
+                    let fullpath = prefix.to_owned() + "/" + unquoted;
+                    verbose_eprintln!(opt, "fullpath: {:?}", fullpath);
+                    let cpath = expect_fmt!(std::path::Path::new(&fullpath).canonicalize(),
+                                            "Path {:?} does not exist",
+                                            fullpath);
+                    verbose_eprintln!(opt, "cpath: {:?}", cpath);
 
-                // TODO: store it as a special "unresolved absolute include" in a map, then
-                // resolve it if needed during final printout when we have the `absolute_includes`
-                // hash map (?)
+                    verbose_eprintln!(opt, "found absolute include to SUBSTITUE {:?}", unquoted);
+                    verbose_eprintln!(opt, "-> cpath: {:?}", cpath);
+
+                    dependencies
+                        .entry(entry_path.to_path_buf())
+                        .or_insert_with(PathSet::new)
+                        .insert(cpath.clone());
+                }
             }
         }
 
@@ -246,14 +257,13 @@ fn for_all_headers<F>(opt: &Opt, mut f: F)
 fn produce_final_result(opt: &Opt,
                         top_include_path: &Path,
                         dependencies: &PathGraph,
-                        include_directive_lines: &HashSet<String>,
-                        absolute_includes: &HashMap<String, PathBuf>)
+                        include_directive_lines: &HashSet<String>)
                         -> String {
     let mut result = String::new();
 
-    result += "// generated with `unosolo`";
-    result += "https://github.com/SuperV1234/unosolo";
-    result += "#pragma once";
+    result += "// generated with `unosolo`\n";
+    result += "https://github.com/SuperV1234/unosolo\n";
+    result += "#pragma once\n\n";
 
     walk_pg(&mut result,
             opt,
@@ -264,17 +274,20 @@ fn produce_final_result(opt: &Opt,
     result
 }
 
-fn produce(opt: &Opt) -> String {
+fn produce_final_result_from_opt(opt: &Opt) -> String {
     let mut dependencies = PathGraph::new();
     let mut absolute_includes = HashMap::<String, PathBuf>::new();
     let mut include_directive_lines = HashSet::new();
 
-    for_all_headers(opt, |c_entry_path, at_library_root, prefix, parent| {
+    // Fill `absolute_includes` with "`<...>` -> absolute path".
+    // TODO: extend to multiple libraries
+    for_all_headers(opt, |c_entry_path, at_library_root, _, _| {
         absolute_includes
             .entry(at_library_root.to_str().unwrap().to_string())
             .or_insert_with(|| c_entry_path.to_path_buf());
     });
 
+    // Create dependency graph between files.
     for_all_headers(opt, |c_entry_path, at_library_root, prefix, parent| {
         verbose_eprintln!(opt, "c_entry_path: {:?}", c_entry_path);
         verbose_eprintln!(opt, "at_library_root: {:?}", at_library_root);
@@ -296,6 +309,21 @@ fn produce(opt: &Opt) -> String {
 
     verbose_eprintln!(opt, "ABSOLUTE_INCLUDES: {:?}", absolute_includes);
 
+    /*
+    for (ak, av) in dependencies
+            .iter()
+            .filter(|&(k, v)| {
+                        dependencies
+                            .iter()
+                            .filter(|&(k2, v2)| !v2.contains(k))
+                            .count() == dependencies.len()
+                    }) {
+        verbose_eprintln!(opt, "NODEPS: {:?}", ak);
+    }
+    */
+
+    // Traverse graph starting from "top include path" and return "final
+    // single header" string.
     let top_include_path = PathBuf::from(&opt.top_include)
         .canonicalize()
         .expect("Top include path doesn't exist or is not a directory.");
@@ -303,16 +331,15 @@ fn produce(opt: &Opt) -> String {
     produce_final_result(opt,
                          &top_include_path,
                          &dependencies,
-                         &include_directive_lines,
-                         &absolute_includes)
+                         &include_directive_lines)
 }
 
 fn main() {
     let opt = Opt::from_args();
     verbose_eprintln!(opt, "Options: {:?}", opt);
 
-    let result = produce(&opt);
-    println!("{}", result);
+    // Produce final single header and print to `stdout`.
+    println!("{}", produce_final_result_from_opt(&opt));
 }
 
 #[test]
