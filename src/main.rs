@@ -61,7 +61,9 @@ type PathGraph = HashMap<PathBuf, PathSet>;
 fn is_header(x: &walkdir::DirEntry) -> bool {
     x.file_name()
         .to_str()
-        .map_or(false, |s| s.ends_with(".h") || s.ends_with(".hpp"))
+        .map_or(false, |s| {
+            s.ends_with(".h") || s.ends_with(".hpp") || s.ends_with(".inl") || s.ends_with(".cpp")
+        })
 }
 
 /// Returns `true` if `s` is a line contaning only an inline C++ comment.
@@ -103,21 +105,22 @@ fn walk_pg_impl(result: &mut String,
                 key: &Path,
                 depth: usize,
                 visited: &mut PathSet) {
-    dependencies
-        .get(key)
-        .map(|vec| for dependency_path in vec {
-                 walk_pg_impl(result,
-                              opt,
-                              dependencies,
-                              include_directive_lines,
-                              dependency_path,
-                              depth + 1,
-                              visited);
-             });
-
     if !visited.contains(key) {
-        verbose_eprintln!(opt, "{} {:?}", "\t".repeat(depth), key);
         visited.insert(key.to_owned());
+
+        dependencies
+            .get(key)
+            .map(|vec| for dependency_path in vec {
+                     walk_pg_impl(result,
+                                  opt,
+                                  dependencies,
+                                  include_directive_lines,
+                                  dependency_path,
+                                  depth + 1,
+                                  visited);
+                 });
+
+        verbose_eprintln!(opt, "{} {:?}", "\t".repeat(depth), key);
 
         let f = expect_fmt!(File::open(key), "File {:?} doesn't exist", key);
         let f = BufReader::new(f);
@@ -151,6 +154,12 @@ fn walk_pg(result: &mut String,
                  top_include_path,
                  0,
                  &mut visited)
+}
+
+fn unwrap_canonicalize(x: &str) -> std::path::PathBuf {
+    expect_fmt!(std::path::Path::new(&x).canonicalize(),
+                "Path {:?} does not exist",
+                x)
 }
 
 /// Builds the dependency graph and include directives set by reading the file at `entry_path`.
@@ -189,39 +198,29 @@ fn fill_dependencies(opt: &Opt,
         match include_type {
             IncludeType::Relative => {
                 include_directive_lines.insert(line.clone());
-                let fullpath = prefix.to_owned() + "/" + parent + "/" + unquoted;
+                let fullpath = format!("{}/{}/{}", prefix, parent, unquoted);
+                let cpath = unwrap_canonicalize(&fullpath);
+
                 verbose_eprintln!(opt, "fullpath: {:?}", fullpath);
-                let cpath = expect_fmt!(std::path::Path::new(&fullpath).canonicalize(),
-                                        "Path {:?} does not exist",
-                                        fullpath);
                 verbose_eprintln!(opt, "cpath: {:?}", cpath);
+                verbose_eprintln!(opt, "putting {:?} inside {:?}", entry_path, cpath);
 
                 dependencies
                     .entry(entry_path.to_path_buf())
                     .or_insert_with(PathSet::new)
-                    .insert(cpath.clone());
-
-                verbose_eprintln!(opt, "putting {:?} inside {:?}", entry_path, cpath.clone());
+                    .insert(cpath);
             }
             IncludeType::Absolute => {
                 verbose_eprintln!(opt, "found absolute include: {:?}", unquoted);
 
                 if absolute_includes.contains_key(unquoted) {
-                    include_directive_lines.insert(line.clone());
-                    let fullpath = prefix.to_owned() + "/" + unquoted;
-                    verbose_eprintln!(opt, "fullpath: {:?}", fullpath);
-                    let cpath = expect_fmt!(std::path::Path::new(&fullpath).canonicalize(),
-                                            "Path {:?} does not exist",
-                                            fullpath);
-                    verbose_eprintln!(opt, "cpath: {:?}", cpath);
-
                     verbose_eprintln!(opt, "found absolute include to SUBSTITUE {:?}", unquoted);
-                    verbose_eprintln!(opt, "-> cpath: {:?}", cpath);
 
+                    include_directive_lines.insert(line.clone());
                     dependencies
                         .entry(entry_path.to_path_buf())
                         .or_insert_with(PathSet::new)
-                        .insert(cpath.clone());
+                        .insert(absolute_includes.get(unquoted).unwrap().to_path_buf());
                 }
             }
         }
@@ -236,19 +235,20 @@ fn for_all_headers<F>(opt: &Opt, mut f: F)
 {
     for prefix in &opt.paths {
         let c_prefix = PathBuf::from(prefix).canonicalize().unwrap();
+        let c_prefix_str = c_prefix.to_str().unwrap();
 
         for entry in WalkDir::new(&prefix)
                 .into_iter()
                 .filter_map(|e| e.ok())
                 .filter(is_header) {
-            let c_entry_path = entry.path().to_path_buf().canonicalize().unwrap();
+            let c_entry_path = entry.path().canonicalize().unwrap();
             let at_library_root = c_entry_path.strip_prefix(&c_prefix).unwrap();
-            let parent = at_library_root.parent().unwrap().to_str().unwrap();
+            let parent = at_library_root
+                .parent()
+                .and_then(|x| x.to_str())
+                .unwrap();
 
-            f(&c_entry_path,
-              at_library_root,
-              c_prefix.to_str().unwrap(),
-              parent)
+            f(&c_entry_path, at_library_root, c_prefix_str, parent)
         }
     }
 }
@@ -262,7 +262,7 @@ fn produce_final_result(opt: &Opt,
     let mut result = String::new();
 
     result += "// generated with `unosolo`\n";
-    result += "https://github.com/SuperV1234/unosolo\n";
+    result += "// https://github.com/SuperV1234/unosolo\n";
     result += "#pragma once\n\n";
 
     walk_pg(&mut result,
@@ -287,6 +287,8 @@ fn produce_final_result_from_opt(opt: &Opt) -> String {
             .or_insert_with(|| c_entry_path.to_path_buf());
     });
 
+    verbose_eprintln!(opt, "ABSOLUTE_INCLUDES: {:?}", absolute_includes);
+
     // Create dependency graph between files.
     for_all_headers(opt, |c_entry_path, at_library_root, prefix, parent| {
         verbose_eprintln!(opt, "c_entry_path: {:?}", c_entry_path);
@@ -306,8 +308,6 @@ fn produce_final_result_from_opt(opt: &Opt) -> String {
                           prefix,
                           parent);
     });
-
-    verbose_eprintln!(opt, "ABSOLUTE_INCLUDES: {:?}", absolute_includes);
 
     /*
     for (ak, av) in dependencies
