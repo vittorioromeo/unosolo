@@ -2,15 +2,18 @@
 // MIT License |  https://opensource.org/licenses/MIT
 // http://vittorioromeo.info | vittorio.romeo@outlook.com
 
+// TODO:
+#![allow(dead_code)]
+
 #[macro_use]
 extern crate structopt_derive;
 
 #[macro_use]
 extern crate lazy_static;
 
-extern crate walkdir;
-extern crate structopt;
 extern crate regex;
+extern crate structopt;
+extern crate walkdir;
 
 use walkdir::WalkDir;
 use structopt::StructOpt;
@@ -27,13 +30,20 @@ use regex::Regex;
 #[structopt(name = "unosolo",
             about = "transforms a C++ header-only library in a self-contained single header.")]
 struct Opt {
-    #[structopt(short = "p", long = "paths", help = "paths", default_value = ".")]
+    #[structopt(short = "p",
+                long = "paths",
+                help = "include paths",
+                default_value = ".")]
     paths: Vec<String>,
 
-    #[structopt(short = "v", long = "verbose", help = "verbose")]
+    #[structopt(short = "v",
+                long = "verbose",
+                help = "enable verbose mode")]
     verbose: bool,
 
-    #[structopt(short = "t", long = "topinclude", help = "top-level include")]
+    #[structopt(short = "t",
+                long = "topinclude",
+                help = "top-level include path (library entrypoint)")]
     top_include: String,
 }
 
@@ -53,6 +63,21 @@ macro_rules! expect_fmt {
     }
 }
 
+/// Generates a function called `fn_name` that takes a `s: &str` and
+// returns `true` if `s` matches `regex_string`.
+macro_rules! regex_matcher {
+    ($fn_name:ident, $regex_string:expr) => {
+        fn $fn_name(s: &str) -> bool {
+            lazy_static! {
+                static ref RE: Regex =
+                    Regex::new($regex_string).unwrap();
+            }
+
+            RE.is_match(s)
+        }
+    }
+}
+
 // Type aliases for the path graph.
 type PathSet = HashSet<PathBuf>;
 type PathGraph = HashMap<PathBuf, PathSet>;
@@ -67,24 +92,10 @@ fn is_header(x: &walkdir::DirEntry) -> bool {
 }
 
 /// Returns `true` if `s` is a line contaning only an inline C++ comment.
-fn is_comment(s: &str) -> bool {
-    lazy_static! {
-        static ref RE: Regex = Regex::new(
-            r#"^[[:blank:]]*(//.*)|"(?:\\"|.)*?""#).unwrap();
-    }
-
-    RE.is_match(s)
-}
+regex_matcher!(is_comment, r#"^[[:blank:]]*//.*"#);
 
 /// Returns `true` if `s` is a line containing only `#pragma once`.
-fn is_pragma_once(s: &str) -> bool {
-    lazy_static! {
-        static ref RE: Regex = Regex::new(
-            r#"[[:blank:]]*#pragma once.*"#).unwrap();
-    }
-
-    RE.is_match(s)
-}
+regex_matcher!(is_pragma_once, r#"[[:blank:]]*#pragma once.*"#);
 
 /// Returns `s` without the first and last character.
 fn unquote(s: &str) -> &str {
@@ -97,80 +108,21 @@ fn is_include_directive(s: &str) -> bool {
         .map_or(false, |y| s[0..y].chars().all(|c| c.is_whitespace()))
 }
 
-/// Step of the graph traversal, prints lines to the final single include.
-fn walk_pg_impl(result: &mut String,
-                opt: &Opt,
-                dependencies: &PathGraph,
-                include_directive_lines: &HashSet<String>,
-                key: &Path,
-                depth: usize,
-                visited: &mut PathSet) {
-    if !visited.contains(key) {
-        visited.insert(key.to_owned());
-
-        dependencies
-            .get(key)
-            .map(|vec| for dependency_path in vec {
-                     walk_pg_impl(result,
-                                  opt,
-                                  dependencies,
-                                  include_directive_lines,
-                                  dependency_path,
-                                  depth + 1,
-                                  visited);
-                 });
-
-        verbose_eprintln!(opt, "{} {:?}", "\t".repeat(depth), key);
-
-        let f = expect_fmt!(File::open(key), "File {:?} doesn't exist", key);
-        let f = BufReader::new(f);
-
-        for line in f.lines()
-                .filter_map(|e| e.ok())
-                .filter(|l| {
-                            !include_directive_lines.contains(l) && !is_comment(l) &&
-                            !is_pragma_once(l)
-                        }) {
-            *result += &line;
-            *result += "\n";
-        }
-
-        *result += "\n\n\n";
-    }
-}
-
-/// Begins walking through the `dependencies` graph, starting from `top_include_path`.
-fn walk_pg(result: &mut String,
-           opt: &Opt,
-           dependencies: &PathGraph,
-           include_directive_lines: &HashSet<String>,
-           top_include_path: &Path) {
-    let mut visited = PathSet::new();
-
-    walk_pg_impl(result,
-                 opt,
-                 dependencies,
-                 include_directive_lines,
-                 top_include_path,
-                 0,
-                 &mut visited)
-}
-
 fn unwrap_canonicalize(x: &str) -> std::path::PathBuf {
     expect_fmt!(std::path::Path::new(&x).canonicalize(),
-                "Path {:?} does not exist",
+                "Path {:#?} does not exist",
                 x)
 }
 
 /// Builds the dependency graph and include directives set by reading the file at `entry_path`.
 fn fill_dependencies(opt: &Opt,
                      dependencies: &mut PathGraph,
-                     include_directive_lines: &mut HashSet<String>,
+                     include_directive_lines: &mut HashMap<String, PathBuf>,
                      absolute_includes: &HashMap<String, PathBuf>,
                      entry_path: &Path,
                      prefix: &str,
                      parent: &str) {
-    let f = expect_fmt!(File::open(entry_path), "Could not open '{:?}'", entry_path);
+    let f = expect_fmt!(File::open(entry_path), "Could not open '{:#?}'", entry_path);
     let f = BufReader::new(f);
 
     for line in f.lines()
@@ -194,38 +146,24 @@ fn fill_dependencies(opt: &Opt,
         };
 
         let unquoted = unquote(filename);
-
         match include_type {
-            IncludeType::Relative => {
-                include_directive_lines.insert(line.clone());
-                let fullpath = format!("{}/{}/{}", prefix, parent, unquoted);
-                let cpath = unwrap_canonicalize(&fullpath);
-
-                verbose_eprintln!(opt, "fullpath: {:?}", fullpath);
-                verbose_eprintln!(opt, "cpath: {:?}", cpath);
-                verbose_eprintln!(opt, "putting {:?} inside {:?}", entry_path, cpath);
-
-                dependencies
-                    .entry(entry_path.to_path_buf())
-                    .or_insert_with(PathSet::new)
-                    .insert(cpath);
-            }
-            IncludeType::Absolute => {
-                verbose_eprintln!(opt, "found absolute include: {:?}", unquoted);
-
-                if absolute_includes.contains_key(unquoted) {
-                    verbose_eprintln!(opt, "found absolute include to SUBSTITUE {:?}", unquoted);
-
-                    include_directive_lines.insert(line.clone());
-                    dependencies
-                        .entry(entry_path.to_path_buf())
-                        .or_insert_with(PathSet::new)
-                        .insert(absolute_includes.get(unquoted).unwrap().to_path_buf());
+                IncludeType::Relative => {
+                    Some(unwrap_canonicalize(&format!("{}/{}/{}", prefix, parent, unquoted)))
+                }
+                IncludeType::Absolute => {
+                    absolute_includes
+                        .get(unquoted)
+                        .map_or(None, |x| Some(x.to_path_buf()))
                 }
             }
-        }
+            .map(|cpath| {
+                     dependencies
+                         .entry(entry_path.to_path_buf())
+                         .or_insert_with(PathSet::new)
+                         .insert(cpath.clone());
 
-        verbose_eprintln!(opt, "");
+                     include_directive_lines.insert(line.clone(), cpath);
+                 });
     }
 }
 
@@ -234,7 +172,7 @@ fn for_all_headers<F>(opt: &Opt, mut f: F)
     where F: FnMut(&Path, &Path, &str, &str) -> ()
 {
     for prefix in &opt.paths {
-        let c_prefix = PathBuf::from(prefix).canonicalize().unwrap();
+        let c_prefix = unwrap_canonicalize(prefix);
         let c_prefix_str = c_prefix.to_str().unwrap();
 
         for entry in WalkDir::new(&prefix)
@@ -253,22 +191,59 @@ fn for_all_headers<F>(opt: &Opt, mut f: F)
     }
 }
 
+// TODO: docs
+fn expand(opt: &Opt,
+          result: &mut String,
+          dependencies: &PathGraph,
+          include_directive_lines: &HashMap<String, std::path::PathBuf>,
+          visited: &mut PathSet,
+          path: &Path) {
+    verbose_eprintln!(opt, "expanding {:#?}", path);
+
+    let f = expect_fmt!(File::open(path), "File {:#?} doesn't exist", path);
+    let f = BufReader::new(f);
+
+    for line in f.lines()
+            .filter_map(|e| e.ok())
+            .filter(|l| !is_comment(l) && !is_pragma_once(l)) {
+        if include_directive_lines.contains_key(&line) {
+            let cpath = include_directive_lines.get(&line).unwrap();
+            if !visited.contains(cpath) {
+                visited.insert(cpath.clone());
+                &expand(opt,
+                        result,
+                        dependencies,
+                        include_directive_lines,
+                        visited,
+                        cpath);
+            }
+        } else {
+            *result += &line;
+        }
+
+        *result += "\n";
+    }
+}
+
 /// Prints the final header file to `stdout`.
 fn produce_final_result(opt: &Opt,
                         top_include_path: &Path,
                         dependencies: &PathGraph,
-                        include_directive_lines: &HashSet<String>)
+                        include_directive_lines: &HashMap<String, std::path::PathBuf>)
                         -> String {
     let mut result = String::new();
+    result.reserve(1024 * 24); // TODO: calculate from source files
 
     result += "// generated with `unosolo`\n";
     result += "// https://github.com/SuperV1234/unosolo\n";
     result += "#pragma once\n\n";
 
-    walk_pg(&mut result,
-            opt,
+    let mut visited = PathSet::new();
+    &expand(opt,
+            &mut result,
             dependencies,
             include_directive_lines,
+            &mut visited,
             top_include_path);
 
     result
@@ -277,24 +252,21 @@ fn produce_final_result(opt: &Opt,
 fn produce_final_result_from_opt(opt: &Opt) -> String {
     let mut dependencies = PathGraph::new();
     let mut absolute_includes = HashMap::<String, PathBuf>::new();
-    let mut include_directive_lines = HashSet::new();
+    let mut include_directive_lines = HashMap::<String, PathBuf>::new();
 
     // Fill `absolute_includes` with "`<...>` -> absolute path".
-    // TODO: extend to multiple libraries
     for_all_headers(opt, |c_entry_path, at_library_root, _, _| {
         absolute_includes
             .entry(at_library_root.to_str().unwrap().to_string())
             .or_insert_with(|| c_entry_path.to_path_buf());
     });
 
-    verbose_eprintln!(opt, "ABSOLUTE_INCLUDES: {:?}", absolute_includes);
-
     // Create dependency graph between files.
     for_all_headers(opt, |c_entry_path, at_library_root, prefix, parent| {
-        verbose_eprintln!(opt, "c_entry_path: {:?}", c_entry_path);
-        verbose_eprintln!(opt, "at_library_root: {:?}", at_library_root);
-        verbose_eprintln!(opt, "prefix: {:?}", prefix);
-        verbose_eprintln!(opt, "parent: {:?}\n", parent);
+        verbose_eprintln!(opt, "c_entry_path: {:#?}", c_entry_path);
+        verbose_eprintln!(opt, "at_library_root: {:#?}", at_library_root);
+        verbose_eprintln!(opt, "prefix: {:#?}", prefix);
+        verbose_eprintln!(opt, "parent: {:#?}\n", parent);
 
         dependencies
             .entry(c_entry_path.to_path_buf())
@@ -309,24 +281,13 @@ fn produce_final_result_from_opt(opt: &Opt) -> String {
                           parent);
     });
 
-    /*
-    for (ak, av) in dependencies
-            .iter()
-            .filter(|&(k, v)| {
-                        dependencies
-                            .iter()
-                            .filter(|&(k2, v2)| !v2.contains(k))
-                            .count() == dependencies.len()
-                    }) {
-        verbose_eprintln!(opt, "NODEPS: {:?}", ak);
-    }
-    */
+    verbose_eprintln!(opt, "ABSOLUTE_INCLUDES: {:#?}", absolute_includes);
+    verbose_eprintln!(opt, "DEPENDENCIES: {:#?}", dependencies);
+    verbose_eprintln!(opt, "ICD: {:#?}", include_directive_lines);
 
     // Traverse graph starting from "top include path" and return "final
     // single header" string.
-    let top_include_path = PathBuf::from(&opt.top_include)
-        .canonicalize()
-        .expect("Top include path doesn't exist or is not a directory.");
+    let top_include_path = unwrap_canonicalize(&opt.top_include);
 
     produce_final_result(opt,
                          &top_include_path,
@@ -336,25 +297,8 @@ fn produce_final_result_from_opt(opt: &Opt) -> String {
 
 fn main() {
     let opt = Opt::from_args();
-    verbose_eprintln!(opt, "Options: {:?}", opt);
+    verbose_eprintln!(opt, "Options: {:#?}", opt);
 
     // Produce final single header and print to `stdout`.
     println!("{}", produce_final_result_from_opt(&opt));
 }
-
-#[test]
-fn test0() {}
-
-// TODO: allow multiple libraries to be specified (imagine vrm_core and vrm_cpp)
-// TODO: automatically detect top-header includes
-// TODO: rewrite?
-// TODO: this is broken:
-/*
-
-#if VRM_CORE_IMPL_ASSERT_DISABLED
-#include <vrm/core/assert/impl/assert_macros_disabled.hpp>
-#else
-#include <vrm/core/assert/impl/assert_macros_enabled.hpp>
-#endif
-
-*/
