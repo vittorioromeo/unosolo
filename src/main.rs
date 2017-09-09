@@ -32,18 +32,18 @@ use regex::Regex;
 struct Opt {
     #[structopt(short = "p",
                 long = "paths",
-                help = "include paths",
+                help = "Include paths",
                 default_value = ".")]
     paths: Vec<String>,
 
     #[structopt(short = "v",
                 long = "verbose",
-                help = "enable verbose mode")]
+                help = "Enable verbose mode")]
     verbose: bool,
 
     #[structopt(short = "t",
                 long = "topinclude",
-                help = "top-level include path (library entrypoint)")]
+                help = "Top-level include file path (entrypoint)")]
     top_include: String,
 }
 
