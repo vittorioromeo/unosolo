@@ -53,7 +53,7 @@ macro_rules! verbose_eprintln {
     }
 }
 
-/// TODO: docs
+/// Pretty-prints `x` to `stderr` only if verbose mode is enabled.
 macro_rules! verbose_eprettyprint {
     ($opt:expr, $x:ident) => {
         verbose_eprintln!($opt, "{}: {:#?}", stringify!($x), $x);
@@ -68,7 +68,7 @@ macro_rules! expect_fmt {
 }
 
 /// Generates a function called `fn_name` that takes a `s: &str` and
-// returns `true` if `s` matches `regex_string`.
+/// returns `true` if `s` matches `regex_string`.
 macro_rules! regex_matcher {
     ($fn_name:ident, $regex_string:expr) => {
         fn $fn_name(s: &str) -> bool {
@@ -185,7 +185,8 @@ fn for_all_headers<F>(opt: &Opt, mut f: F)
     }
 }
 
-// TODO: docs
+/// Expands the file at `path` into `result`, recursively expanding non-visited
+/// header files.
 fn expand(opt: &Opt,
           result: &mut String,
           include_directive_lines: &HashMap<String, std::path::PathBuf>,
