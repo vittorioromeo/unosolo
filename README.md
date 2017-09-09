@@ -18,9 +18,7 @@
 
 ## Disclaimer
 
-This is my first Rust project, mainly created to start getting used to the language. The code quality is horrible, the algorithm used to create and traverse the `#include` graph is suboptimal, and only *header-only* libraries with relative `#include "..."` directives are currently supported.
-
-My intention is to improve `unosolo` as I get better with Rust and the final goal is being able to successfully use it on popular libraries.
+This is my first Rust project, mainly created to start getting used to the language. My intention is to improve `unosolo` as I get better with Rust and the final goal is being able to successfully use it on popular libraries.
 
 I also do not encourage people to create single-header libraries and use those in their projects: they're mainly useful when dealing with very complicated build systems or when experimenting on an online compiler that doesn't allow users to easily import multiple files.
 
