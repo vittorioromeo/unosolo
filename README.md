@@ -1,6 +1,6 @@
 # unosolo
 
-> **Work-in-progress Rust application that converts C++ libraries to single self-contained headers.**
+> **Work-in-progress Rust application that converts C++ header-only libraries to single self-contained headers.**
 
 [![stability][badge.stability]][stability]
 [![license][badge.license]][license]
@@ -28,7 +28,7 @@ I also do not encourage people to create single-header libraries and use those i
 
 ## Overview
 
-Given a set of paths containing the C++ library's header files and a "top-level include" file where the graph traversal will start from, `unosolo` outputs a self-contained single-header version of the library to `stdout`. Here's the [`clap-rs`](https://github.com/kbknapp/clap-rs) auto-generated help:
+Given a set of paths containing the C++ header-only library's header files and a "top-level include" file where the graph traversal will start from, `unosolo` outputs a self-contained single-header version of the library to `stdout`. Here's the [`clap-rs`](https://github.com/kbknapp/clap-rs) auto-generated help:
 
 ```
 unosolo 0.1.1
