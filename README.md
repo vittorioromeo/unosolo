@@ -18,11 +18,25 @@
 
 ## Disclaimer
 
-This is my first Rust project, mainly created to start getting used to the language. My intention is to improve `unosolo` as I get better with Rust and the final goal is being able to successfully use it on popular libraries.
+This is my first Rust project, mainly created to start getting used to the language. My intention is to improve `unosolo` as I get better with Rust and the final goal is being able to successfully use it on popular libraries. *(If you need a full-fledged customizable preprocessor implementation, check out [pcpp](https://pypi.python.org/pypi/pcpp).)*
 
 I also do not encourage people to create single-header libraries and use those in their projects: they're mainly useful when dealing with very complicated build systems or when experimenting on an online compiler that doesn't allow users to easily import multiple files.
 
 *Contributions and code reviews are welcome!*
+
+
+
+## Build instructions
+
+```bash
+git clone https://github.com/SuperV1234/unosolo
+cd unosolo
+cargo build
+```
+
+* `cargo run -- args...` can be used to build&run `unosolo`.
+
+* `cargo install` can be used to install `unosolo` on the user's system.
 
 
 
