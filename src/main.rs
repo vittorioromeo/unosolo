@@ -41,7 +41,7 @@ struct Opt {
     #[structopt(short = "t",
                 long = "topinclude",
                 help = "Top-level include file path (entrypoint)")]
-    top_include: String,
+    top_include: Vec<String>,
 }
 
 /// Prints to `stderr` only if verbose mode is enabled.
@@ -64,6 +64,13 @@ macro_rules! verbose_eprettyprint {
 macro_rules! expect_fmt {
     ($x:expr, $($tts:tt)*) => {
         $x.unwrap_or_else(|_| panic!($($tts)*))
+    }
+}
+
+/// Attempts to unwrap `x`, otherwise panics with formatted string.
+macro_rules! expect_fmt_opt {
+    ($x:expr, $($tts:tt)*) => {
+        $x.unwrap_or_else(|| panic!($($tts)*))
     }
 }
 
@@ -90,7 +97,8 @@ fn is_header(x: &walkdir::DirEntry) -> bool {
     x.file_name()
         .to_str()
         .map_or(false, |s| {
-            s.ends_with(".h") || s.ends_with(".hpp") || s.ends_with(".inl") || s.ends_with(".cpp")
+            s.ends_with(".h") || s.ends_with(".hpp") || s.ends_with(".inl") ||
+            s.ends_with(".cpp") || s.ends_with(".c")
         })
 }
 
@@ -126,9 +134,10 @@ fn fill_dependencies(include_directive_lines: &mut HashMap<String, PathBuf>,
     let f = expect_fmt!(File::open(entry_path), "Could not open '{:#?}'", entry_path);
     let f = BufReader::new(f);
 
-    for line in f.lines()
+    for (line_no, line) in f.lines()
             .filter_map(|e| e.ok())
-            .filter(|x| is_include_directive(x)) {
+            .filter(|x| is_include_directive(x))
+            .enumerate() {
         // Cut off `#include`.
         let filename = &line[9..];
 
@@ -137,13 +146,21 @@ fn fill_dependencies(include_directive_lines: &mut HashMap<String, PathBuf>,
             Absolute,
         };
 
-        let include_type = match filename
-                  .chars()
-                  .nth(0)
-                  .expect("Invalid include directive found") {
+        let include_filename = expect_fmt_opt!(filename.chars().nth(0),
+                                               "Invalid include directive found {:#?}",
+                                               filename);
+
+        let include_type = match include_filename {
             '"' => IncludeType::Relative,
             '<' => IncludeType::Absolute,
-            _ => panic!("Invalid include directive found"),
+            _ => {
+                continue;
+                panic!("Invalid include directive found {:#?} at {}:{}\n{}",
+                       include_filename,
+                       entry_path.to_str().unwrap(),
+                       line_no,
+                       line)
+            }
         };
 
         let unquoted = unquote(filename);
@@ -216,7 +233,7 @@ fn expand(opt: &Opt,
 
 /// Prints the final header file to `stdout`.
 fn produce_final_result(opt: &Opt,
-                        top_include_path: &Path,
+                        top_include_path: &[String],
                         include_directive_lines: &HashMap<String, std::path::PathBuf>)
                         -> String {
     let mut result = String::new();
@@ -227,11 +244,14 @@ fn produce_final_result(opt: &Opt,
     result += "#pragma once\n\n";
 
     let mut visited = PathSet::new();
-    expand(opt,
-           &mut result,
-           include_directive_lines,
-           &mut visited,
-           top_include_path);
+
+    for tip in top_include_path {
+        expand(opt,
+               &mut result,
+               include_directive_lines,
+               &mut visited,
+               &unwrap_canonicalize(tip));
+    }
 
     result
 }
@@ -274,9 +294,7 @@ fn produce_final_result_from_opt(opt: &Opt) -> String {
 
     // Traverse graph starting from "top include path" and return "final
     // single header" string.
-    produce_final_result(opt,
-                         &unwrap_canonicalize(&opt.top_include),
-                         &include_directive_lines)
+    produce_final_result(opt, &opt.top_include, &include_directive_lines)
 }
 
 fn main() {
